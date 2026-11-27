@@ -244,6 +244,22 @@ class SandboxAdapterTest < Minitest::Test
     refute_equal @calls[0][2], @calls[1][2]
   end
 
+  def test_status_recovers_a_definitive_decline_after_restart
+    @transport = lambda do |uri, body, key|
+      @calls << [uri.path.split('/').last, body, key]
+      { 'resultCode' => 'Refused', 'refusalReason' => 'Not enough balance' }
+    end
+    purchase = base('purchase').merge('card' => CARD, 'amount' => 100, 'currency' => 'USD', 'capture_id' => CAPTURE_ID)
+    post('purchase', purchase, key: 'checkout:lost-decline')
+    @ledger.close
+    open_adapter
+
+    assert_equal 401, capture_status(auth: 'Bearer wrong').first
+    assert_equal [200, { environment: 'test', test: true, capture_id: CAPTURE_ID, status: 'declined',
+                         amount: 100, currency: 'USD', response_code: 'INSUFFICIENT_FUNDS' }], capture_status
+    assert_equal %w[authorise], @calls.map(&:first)
+  end
+
   def test_signed_full_capture_releases_the_enrollment_candidate_after_restart
     purchase = enrollment.merge(base('purchase')).merge(
       'amount' => 100, 'currency' => 'USD', 'capture_id' => CAPTURE_ID, 'metadata' => { 'subscription_id' => 'sub-fixture' }

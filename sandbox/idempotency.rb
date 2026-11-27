@@ -29,6 +29,14 @@ module EverpaySandbox
           UNIQUE (merchant_account, reference)
         )
       SQL
+      @db.execute(<<~SQL)
+        CREATE TABLE IF NOT EXISTS purchase_declines (
+          capture_id TEXT PRIMARY KEY,
+          amount INTEGER NOT NULL,
+          currency TEXT NOT NULL,
+          response_code TEXT NOT NULL
+        )
+      SQL
       @mutex = Mutex.new
     end
 
@@ -47,11 +55,17 @@ module EverpaySandbox
       row = @mutex.synchronize do
         @db.get_first_row('SELECT status, reference, amount, currency, enrollment FROM captures WHERE capture_id = ?', [capture_id])
       end
-      return unless row
+      return decline_status(capture_id) unless row
 
       status, reference, amount, currency, enrollment = row
       { status:, authorization: reference, amount:, currency:,
         enrollment: status == 'captured' && enrollment ? JSON.parse(enrollment) : nil }
+    end
+
+    def record_decline(capture_id, amount, currency, code)
+      @mutex.synchronize do
+        @db.execute('INSERT INTO purchase_declines VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING', [capture_id, amount, currency, code])
+      end
     end
 
     def record_capture_events(events)
@@ -88,6 +102,18 @@ module EverpaySandbox
 
     def close
       @db.close
+    end
+
+    private
+
+    def decline_status(capture_id)
+      row = @mutex.synchronize do
+        @db.get_first_row('SELECT amount, currency, response_code FROM purchase_declines WHERE capture_id = ?', [capture_id])
+      end
+      return unless row
+
+      amount, currency, response_code = row
+      { status: 'declined', amount:, currency:, response_code: }
     end
   end
 end

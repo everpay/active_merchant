@@ -18,4 +18,6 @@ To start the local service, run `ruby -rbundler/setup sandbox/server.rb` with th
 
 For hosted enrollment, Platform OS includes the validated shopper consent context with the purchase. The adapter tokenizes during authorization. It stores the token candidate in its private SQLite file and releases it through the authenticated `POST /api/v1/gateway/capture-status` after a signed, full-amount `CAPTURE` notification to `POST /webhooks/adyen`. An acknowledgment from the capture API leaves the payment pending. A capture failure places it in reconciliation review.
 
+The status endpoint also returns definitive issuer declines from its persistent ledger, keyed by the capture ID and accompanied by the exact amount, currency, and normalized decline code. This lets Platform OS release a reserved attempt when the original response is lost. An unconfirmed authorization remains pending.
+
 Before staging acceptance, verify the approved test account supports Adyen Classic manual capture, delivers signed `CAPTURE` and `CAPTURE_FAILED` events, and returns both tokenization references. Set Platform OS staging's `ACTIVE_MERCHANT_SANDBOX_URL` to the adapter's HTTPS origin and verify its pending-payment watcher runs. Adyen directs new integrations to its Checkout API.

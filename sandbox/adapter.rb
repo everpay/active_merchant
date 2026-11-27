@@ -199,7 +199,15 @@ module EverpaySandbox
         amount = payment.fetch(:processor_amount)
         result = gateway.authorize(amount, instrument, options)
         return pending unless result.test?
-        return processor_failure(result) unless authorized?(result)
+
+        unless authorized?(result)
+          response = processor_failure(result)
+          if response.first == 200
+            @idempotency.record_decline(payment.fetch(:capture_id), payment.fetch(:amount), options.fetch(:currency),
+                                        response.last.fetch(:response_code))
+          end
+          return response
+        end
 
         reference = result.params['pspReference']
         return pending unless present?(reference, 256)
