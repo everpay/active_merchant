@@ -1,4 +1,5 @@
 require 'test_helper'
+require 'timecop'
 
 class Shift4Test < Test::Unit::TestCase
   include CommStub
@@ -403,11 +404,13 @@ class Shift4Test < Test::Unit::TestCase
   end
 
   def test_successful_time_zone_offset
-    stub_comms do
-      @gateway.purchase(@amount, @credit_card, @options.merge!(merchant_time_zone: 'EST'))
-    end.check_request do |_endpoint, data, _headers|
-      assert_equal DateTime.parse(JSON.parse(data)['dateTime']).formatted_offset, Time.now.in_time_zone(@options[:merchant_time_zone]).formatted_offset
-    end.respond_with(successful_purchase_response)
+    Timecop.freeze(Time.utc(2026, 1, 15, 12)) do
+      stub_comms do
+        @gateway.purchase(@amount, @credit_card, @options.merge(merchant_time_zone: 'America/New_York'))
+      end.check_request do |_endpoint, data, _headers|
+        assert_equal '-05:00', DateTime.parse(JSON.parse(data)['dateTime']).formatted_offset
+      end.respond_with(successful_purchase_response)
+    end
   end
 
   def test_support_scrub
