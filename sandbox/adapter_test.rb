@@ -305,26 +305,97 @@ class SandboxAdapterTest < Minitest::Test
   end
 
   def test_http_endpoint_accepts_bearer_and_idempotency_headers
+    with_http_client do |client|
+      assert_equal '200', client.get('/healthz').code
+
+      path = '/api/v1/gateway/store'
+      headers = { 'Authorization' => AUTH, 'Idempotency-Key' => 'renewal-enroll:http', 'Content-Type' => 'application/json' }
+      first = client.post(path, JSON.generate(enrollment), headers)
+      assert_equal '200', first.code
+      assert_equal NETWORK_REFERENCE, JSON.parse(first.body)['network_transaction_id']
+      assert_equal first.body, client.post(path, JSON.generate(enrollment), headers).body
+      assert_equal '413', client.post(path, 'x' * 20_000, headers).code
+      assert_equal %w[authorise], @calls.map(&:first)
+    end
+  end
+
+  def test_http_renewal_stays_pending_until_the_matching_signed_capture_arrives
+    with_http_client do |client|
+      request, pending = start_http_renewal(client)
+      event = capture_notification(amount: 1_234, currency: 'EUR')
+
+      assert_equal '401', post_capture_event(client, event.merge('originalReference' => 'tampered')).code
+      assert_equal '200', post_capture_event(client, capture_notification(amount: 1_234)).code
+      assert_equal '200', post_capture_event(client, capture_notification(amount: 1_234, currency: 'EUR', reference: 'other-authorization')).code
+      assert_equal 'pending', http_capture_status(client).fetch('status')
+      assert_equal pending.body, http_gateway_post(client, 'purchase', request, key: 'renewal:http').body
+
+      assert_equal '200', post_capture_event(client, event).code
+      status = http_capture_status(client)
+      assert_equal({
+        'capture_id' => CAPTURE_ID, 'status' => 'captured', 'amount' => 1_234, 'currency' => 'EUR',
+        'authorization' => 'test-authorization', 'environment' => 'test', 'test' => true
+      }, status)
+      assert_equal '200', post_capture_event(client, event).code
+      assert_equal status, http_capture_status(client)
+      assert_equal pending.body, http_gateway_post(client, 'purchase', request, key: 'renewal:http').body
+      assert_equal %w[authorise authorise capture], @calls.map(&:first)
+    end
+  end
+
+  def test_http_renewal_capture_failure_stays_in_review_after_replay
+    with_http_client do |client|
+      request, pending = start_http_renewal(client)
+      failure = capture_notification(amount: 1_234, currency: 'EUR', event_code: 'CAPTURE_FAILED')
+      success = capture_notification(amount: 1_234, currency: 'EUR')
+
+      assert_equal 'pending', http_capture_status(client).fetch('status')
+      assert_equal '200', post_capture_event(client, failure).code
+      status = http_capture_status(client)
+      assert_equal 'capture_review', status.fetch('status')
+      assert_equal 'test-authorization', status.fetch('authorization')
+      refute status.key?('enrollment')
+      assert_equal '200', post_capture_event(client, failure).code
+      assert_equal status, http_capture_status(client)
+      assert_equal '200', post_capture_event(client, success).code
+      assert_equal status, http_capture_status(client)
+      assert_equal pending.body, http_gateway_post(client, 'purchase', request, key: 'renewal:http').body
+      assert_equal %w[authorise authorise capture], @calls.map(&:first)
+    end
+  end
+
+  private
+
+  def with_http_client
     server = EverpaySandbox.server(@adapter, address: '127.0.0.1', port: 0)
     worker = Thread.new { server.start }
-    port = server.listeners.first.addr[1]
-    client = Net::HTTP.new('127.0.0.1', port, nil)
-    assert_equal '200', client.get('/healthz').code
-
-    path = '/api/v1/gateway/store'
-    headers = { 'Authorization' => AUTH, 'Idempotency-Key' => 'renewal-enroll:http', 'Content-Type' => 'application/json' }
-    first = client.post(path, JSON.generate(enrollment), headers)
-    assert_equal '200', first.code
-    assert_equal NETWORK_REFERENCE, JSON.parse(first.body)['network_transaction_id']
-    assert_equal first.body, client.post(path, JSON.generate(enrollment), headers).body
-    assert_equal '413', client.post(path, 'x' * 20_000, headers).code
-    assert_equal %w[authorise], @calls.map(&:first)
+    yield Net::HTTP.new('127.0.0.1', server.listeners.first.addr[1], nil)
   ensure
     server&.shutdown
     worker&.join
   end
 
-  private
+  def http_gateway_post(client, action, body, key: nil)
+    headers = { 'Authorization' => AUTH, 'Content-Type' => 'application/json' }
+    headers['Idempotency-Key'] = key if key
+    client.post("/api/v1/gateway/#{action}", JSON.generate(body), headers)
+  end
+
+  def http_capture_status(client)
+    response = http_gateway_post(client, 'capture-status', { capture_id: CAPTURE_ID })
+    assert_equal '200', response.code
+    JSON.parse(response.body)
+  end
+
+  def start_http_renewal(client)
+    stored = http_gateway_post(client, 'store', enrollment, key: 'renewal-enroll:http')
+    assert_equal '200', stored.code
+    request = renewal(JSON.parse(stored.body, symbolize_names: true)).merge('capture_id' => CAPTURE_ID)
+    pending = http_gateway_post(client, 'purchase', request, key: 'renewal:http')
+    assert_equal '202', pending.code
+    assert_equal 'pending', JSON.parse(pending.body).fetch('status')
+    [request, pending]
+  end
 
   def open_adapter
     @ledger = EverpaySandbox::Idempotency.new(@path)
@@ -343,16 +414,25 @@ class SandboxAdapterTest < Minitest::Test
 
   def webhook(event, live: 'false')
     @adapter.call(method: 'POST', path: '/webhooks/adyen', authorization: nil, idempotency_key: nil) do
-      JSON.generate(live:, notificationItems: [{ NotificationRequestItem: event }])
+      webhook_payload(event, live:)
     end
   end
 
-  def capture_notification(amount: 100, account: CREDENTIALS.fetch('merchant_account'), event_code: 'CAPTURE', success: 'true')
+  def post_capture_event(client, event)
+    client.post('/webhooks/adyen', webhook_payload(event), { 'Content-Type' => 'application/json' })
+  end
+
+  def webhook_payload(event, live: 'false')
+    JSON.generate(live:, notificationItems: [{ NotificationRequestItem: event }])
+  end
+
+  def capture_notification(amount: 100, currency: 'USD', account: CREDENTIALS.fetch('merchant_account'),
+    reference: 'test-authorization', event_code: 'CAPTURE', success: 'true')
     signature = OpenSSL::HMAC.digest('SHA256', [WEBHOOK_KEY].pack('H*'),
-                                     "test-capture:test-authorization:#{account}:fixture:#{amount}:USD:#{event_code}:#{success}")
+                                     "test-capture:#{reference}:#{account}:fixture:#{amount}:#{currency}:#{event_code}:#{success}")
     {
-      'pspReference' => 'test-capture', 'originalReference' => 'test-authorization', 'merchantAccountCode' => account,
-      'merchantReference' => 'fixture', 'amount' => { 'value' => amount, 'currency' => 'USD' },
+      'pspReference' => 'test-capture', 'originalReference' => reference, 'merchantAccountCode' => account,
+      'merchantReference' => 'fixture', 'amount' => { 'value' => amount, 'currency' => currency },
       'eventCode' => event_code, 'success' => success, 'additionalData' => { 'hmacSignature' => Base64.strict_encode64(signature) }
     }
   end

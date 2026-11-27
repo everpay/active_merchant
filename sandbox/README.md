@@ -21,3 +21,16 @@ For hosted enrollment, Platform OS includes the validated shopper consent contex
 The status endpoint also returns definitive issuer declines from its persistent ledger, keyed by the capture ID and accompanied by the exact amount, currency, and normalized decline code. This lets Platform OS release a reserved attempt when the original response is lost. An unconfirmed authorization remains pending.
 
 Before staging acceptance, verify the approved test account supports Adyen Classic manual capture, delivers signed `CAPTURE` and `CAPTURE_FAILED` events, and returns both tokenization references. Set Platform OS staging's `ACTIVE_MERCHANT_SANDBOX_URL` to the adapter's HTTPS origin and verify its pending-payment watcher runs. Adyen directs new integrations to its Checkout API.
+
+## Verify capture before staging
+
+The local HTTP tests send signed fixture events through `/webhooks/adyen` and read the result from `/api/v1/gateway/capture-status`. They cover delayed delivery, a matching full capture, failure, and request and webhook replay. The fixtures use the suite's HMAC key and synthetic references.
+
+Once test access is confirmed, use a dedicated test merchant, provider-issued test card, and the HMAC key for that merchant's Test Standard webhook.
+
+1. Run the adapter locally. Enroll the test card and verify that both the reusable token and the original network transaction reference are present. Submit one manual renewal with a new capture ID and a stable idempotency key. Verify that status is pending after the capture API acknowledges the request.
+2. Obtain the unmodified signed test event from an approved test webhook receiver. Verify that its merchant account, original authorization reference, amount, and currency match the renewal. Deliver it to the local adapter and confirm `captured` through the status endpoint. Cross-check the capture in the processor's Test Customer Area.
+3. Replay the same renewal payload and event. Verify that the status stays captured and that the Test Customer Area shows just one capture for that renewal.
+4. Use a separate renewal attempt to verify failure handling. Obtain the matching Adyen-signed `CAPTURE_FAILED` event from the same test webhook receiver and deliver it unchanged to the local adapter. Verify that the status moves to `capture_review` after the first delivery and stays there when you replay the event and renewal request. Verify in the Test Customer Area that replay created no additional authorization or capture.
+
+Keep test credentials, tokens, and signed payloads out of source control. Record the capture ID, authorization and capture references, and observed statuses. [Adyen capture events](https://docs.adyen.com/online-payments/capture/) · [Standard webhook signatures](https://docs.adyen.com/development-resources/webhooks/secure-webhooks/verify-hmac-signatures/)
