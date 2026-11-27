@@ -7,6 +7,10 @@ on:
   push:
     branches:
       - master
+      - feat/sandbox-gateway-adapter
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -42,3 +46,21 @@ jobs:
         run: bundle exec rake test
       - name: Linter
         run: bundle exec rubocop
+
+  sandbox-adapter:
+    name: Sandbox adapter (Ruby 3.4)
+    runs-on: ubuntu-latest
+    env:
+      BUNDLE_GEMFILE: sandbox/Gemfile
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+          bundler-cache: true
+
+      - name: Test the sandbox adapter
+        run: bundle exec ruby sandbox/adapter_test.rb
