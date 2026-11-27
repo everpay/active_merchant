@@ -166,6 +166,7 @@ module ActiveMerchant # :nodoc:
 
       def parse(xml)
         response = {}
+        return response if xml.blank?
 
         xml = REXML::Document.new(xml)
 
@@ -177,8 +178,9 @@ module ActiveMerchant # :nodoc:
       end
 
       def post_data(action, parameters = {})
-        xml   = REXML::Document.new("<?xml version='1.0' encoding='UTF-8'?>")
-        root  = xml.add_element('Request')
+        xml = REXML::Document.new
+        xml.add(REXML::XMLDecl.new('1.0', 'UTF-8'))
+        root = xml.add_element('Request')
         root.attributes['StoreID'] = options[:login]
         root.attributes['StoreKey'] = options[:password]
         root.attributes['ApplicationID'] = 'ot 1.0'

@@ -1,0 +1,6 @@
+source 'https://rubygems.org'
+
+gem 'activemerchant', path: '..'
+gem 'minitest', '~> 5.0', group: :test
+gem 'sqlite3', '~> 2.0'
+gem 'webrick', '~> 1.9'

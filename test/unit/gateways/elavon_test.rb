@@ -892,7 +892,7 @@ class ElavonTest < Test::Unit::TestCase
   private
 
   def successful_purchase_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version="1.0" encoding="UTF-8"?>
       <txn>
         <ssl_issuer_response>00</ssl_issuer_response>
@@ -933,7 +933,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def successful_purchase_with_multi_currency_response
-    <<-XML
+    <<-XML.lstrip
       <?xml version="1.0" encoding="UTF-8"?>
       <txn>
         <ssl_issuer_response>00</ssl_issuer_response>
@@ -972,7 +972,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def successful_refund_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version="1.0" encoding="UTF-8"?>
     <txn>
       <ssl_issuer_response>00</ssl_issuer_response>
@@ -1012,7 +1012,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def successful_void_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version="1.0" encoding="UTF-8"?>
     <txn>
       <ssl_last_name>Longsen</ssl_last_name>
@@ -1046,7 +1046,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def successful_verify_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version="1.0" encoding="UTF-8"?>
     <txn>
       <ssl_issuer_response>85</ssl_issuer_response>
@@ -1073,7 +1073,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def failed_purchase_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version="1.0" encoding="UTF-8"?>
     <txn>
       <errorCode>5000</errorCode>
@@ -1084,7 +1084,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def failed_refund_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version="1.0" encoding="UTF-8"?>
     <txn>
       <errorCode>5091</errorCode>
@@ -1095,7 +1095,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def failed_void_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version="1.0" encoding="UTF-8"?>
     <txn>
       <errorCode>5040</errorCode>
@@ -1106,7 +1106,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def failed_verify_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version="1.0" encoding="UTF-8"?>
     <txn>
       <errorCode>5000</errorCode>
@@ -1117,7 +1117,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def invalid_login_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version="1.0" encoding="UTF-8"?>
     <txn>
       <errorCode>4025</errorCode>
@@ -1128,7 +1128,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def successful_authorization_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version=\"1.0\" encoding=\"UTF-8\"?>
     <txn>
       <ssl_issuer_response>00</ssl_issuer_response>
@@ -1159,7 +1159,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def failed_authorization_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version="1.0" encoding="UTF-8"?>
     <txn>
       <errorCode>5000</errorCode>
@@ -1207,7 +1207,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def failed_capture_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version="1.0" encoding="UTF-8"?>
     <txn>
       <errorCode>5004</errorCode>
@@ -1218,7 +1218,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def successful_store_response
-    <<-XML
+    <<-XML.lstrip
     <?xml version="1.0" encoding="UTF-8"?>
     <txn>
       <ssl_last_name>Longsen</ssl_last_name>
@@ -1256,7 +1256,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def failed_store_response
-    <<-XML
+    <<-XML.lstrip
       <?xml version=\"1.0\" encoding=\"UTF-8\"?>
       <txn>
         <errorCode>5000</errorCode>
@@ -1267,7 +1267,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def successful_update_response
-    <<-XML
+    <<-XML.lstrip
       <?xml version="1.0" encoding="UTF-8"?>
       <txn>
         <ssl_token>4421912014039990</ssl_token>
@@ -1295,7 +1295,7 @@ class ElavonTest < Test::Unit::TestCase
   end
 
   def failed_update_response
-    <<-XML
+    <<-XML.lstrip
       <?xml version="1.0" encoding="UTF-8"?>
       <txn>
         <ssl_token>4421912014039990</ssl_token>
