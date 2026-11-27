@@ -16,7 +16,56 @@ module EverpaySandbox
           reply TEXT
         )
       SQL
+      @db.execute(<<~SQL)
+        CREATE TABLE IF NOT EXISTS captures (
+          capture_id TEXT PRIMARY KEY,
+          merchant_account TEXT NOT NULL,
+          reference TEXT NOT NULL,
+          currency TEXT NOT NULL,
+          amount INTEGER NOT NULL,
+          processor_amount INTEGER NOT NULL,
+          enrollment TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          UNIQUE (merchant_account, reference)
+        )
+      SQL
       @mutex = Mutex.new
+    end
+
+    def record_authorization(capture_id, attributes)
+      values = attributes.values_at(:account, :reference, :amount, :processor_amount, :currency)
+      enrollment = attributes[:enrollment]
+      @mutex.synchronize do
+        @db.execute(<<~SQL, [capture_id, *values, enrollment && JSON.generate(enrollment)])
+          INSERT INTO captures (capture_id, merchant_account, reference, amount, processor_amount, currency, enrollment)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        SQL
+      end
+    end
+
+    def capture_status(capture_id)
+      row = @mutex.synchronize do
+        @db.get_first_row('SELECT status, reference, amount, currency, enrollment FROM captures WHERE capture_id = ?', [capture_id])
+      end
+      return unless row
+
+      status, reference, amount, currency, enrollment = row
+      { status:, authorization: reference, amount:, currency:,
+        enrollment: status == 'captured' && enrollment ? JSON.parse(enrollment) : nil }
+    end
+
+    def record_capture_events(events)
+      @mutex.synchronize do
+        @db.transaction do
+          events.each do |status, account, reference, amount, currency|
+            @db.execute(<<~SQL, [status, account, reference, amount, currency])
+              UPDATE captures SET status = ?
+              WHERE merchant_account = ? AND reference = ? AND processor_amount = ? AND currency = ?
+                AND status <> 'capture_review'
+            SQL
+          end
+        end
+      end
     end
 
     def run(key, fingerprint, pending)

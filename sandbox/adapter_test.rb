@@ -6,7 +6,9 @@ require_relative 'server'
 class SandboxAdapterTest < Minitest::Test
   SECRET = 'bearer-fixture-only-' * 2
   SIGNING_KEY = 'signing-fixture-only-' * 2
+  WEBHOOK_KEY = '72' * 32
   AUTH = "Bearer #{SECRET}"
+  CAPTURE_ID = 'a' * 64
   NETWORK_REFERENCE = 'sandbox-network-reference'
   CARD_TOKEN = 'sandbox-card-token'
   CARD = {
@@ -206,6 +208,86 @@ class SandboxAdapterTest < Minitest::Test
     assert_equal 505, @calls[2][1].dig('modificationAmount', 'value')
   end
 
+  def test_provider_currency_exceptions_are_applied_to_authorization_and_capture
+    purchase = base('purchase').merge('card' => CARD)
+    { 'CLP' => [1_000, 100_000], 'IDR' => [100_000, 1_000], 'CVE' => [1_200, 12] }.each do |code, (input, expected)|
+      @calls.clear
+      # Distinct processor authorizations for the three requests.
+      @transport = lambda do |uri, body, key|
+        respond_to_adyen(uri, body, key).merge('pspReference' => "fixture-#{code}")
+      end
+      assert_equal 202, post('purchase', purchase.merge('amount' => input, 'currency' => code), key: code).first
+      assert_equal expected, @calls[0][1].dig('amount', 'value')
+      assert_equal expected, @calls[1][1].dig('modificationAmount', 'value')
+    end
+    @calls.clear
+    assert_equal [422, { environment: 'test', test: true, success: false, response_code: 'CURRENCY',
+                         message: 'The amount cannot be represented in Adyen minor units' }],
+                 post('purchase', purchase.merge('amount' => 101, 'currency' => 'IDR'), key: 'bad-precision')
+    assert_empty @calls
+  end
+
+  def test_distinct_attempt_keys_allow_a_new_card_on_the_same_order
+    @transport = lambda do |uri, body, key|
+      @calls << [uri.path.split('/').last, body, key]
+      reason = @calls.length == 1 ? 'Issuer Unavailable' : 'Not enough balance'
+      { 'resultCode' => 'Refused', 'refusalReason' => reason }
+    end
+    order = base('purchase').merge('card' => CARD, 'amount' => 100, 'currency' => 'USD', 'metadata' => { 'order_id' => 'one-order' })
+    first = post('purchase', order, key: 'checkout:first')
+    assert_equal '91', first.last[:response_code]
+    assert_equal first, post('purchase', order, key: 'checkout:first')
+    replacement = order.merge('card' => CARD.merge('number' => '5555555555554444'))
+    second = post('purchase', replacement, key: 'checkout:second')
+    assert_equal 'Insufficient funds', second.last[:message]
+    assert_equal(%w[one-order one-order], @calls.map { |call| call[1]['reference'] })
+    refute_equal @calls[0][2], @calls[1][2]
+  end
+
+  def test_signed_full_capture_releases_the_enrollment_candidate_after_restart
+    purchase = enrollment.merge(base('purchase')).merge(
+      'amount' => 100, 'currency' => 'USD', 'capture_id' => CAPTURE_ID, 'metadata' => { 'subscription_id' => 'sub-fixture' }
+    )
+    assert_equal 202, post('purchase', purchase, key: 'checkout:consented').first
+    auth_request = @calls.first[1]
+    assert_equal 'RECURRING', auth_request.dig('recurring', 'contract')
+    assert_equal 'Ecommerce', auth_request['shopperInteraction']
+    assert_equal 'true', auth_request.dig('additionalData', 'manualCapture')
+    assert_equal 401, capture_status(auth: 'Bearer wrong').first
+    assert_nil capture_status.last[:enrollment]
+
+    event = capture_notification
+    assert_equal 401, webhook(event.merge('merchantReference' => 'altered')).first
+    assert_equal 422, webhook(event, live: 'true').first
+    assert_equal 200, webhook(capture_notification(amount: 50)).first
+    assert_equal 200, webhook(capture_notification(account: 'other-account')).first
+    assert_equal 'pending', capture_status.last[:status]
+
+    @ledger.close
+    open_adapter
+    assert_equal 200, webhook(event).first
+    assert_equal 200, webhook(event).first
+    result = capture_status.last
+    assert_equal 'captured', result[:status]
+    assert_equal 100, result[:amount]
+    assert_equal NETWORK_REFERENCE, result.dig(:enrollment, 'network_transaction_id')
+    assert_match(/\A[\w-]+\.[a-f0-9]{64}\z/, result.dig(:enrollment, 'token'))
+
+    assert_equal 200, webhook(capture_notification(event_code: 'CAPTURE_FAILED')).first
+    assert_equal 200, webhook(event).first
+    assert_equal 'capture_review', capture_status.last[:status]
+    assert_nil capture_status.last[:enrollment]
+    assert_equal %w[authorise capture], @calls.map(&:first)
+  end
+
+  def test_capture_refusal_remains_held_for_reconciliation
+    purchase = base('purchase').merge('card' => CARD, 'amount' => 100, 'currency' => 'USD', 'capture_id' => CAPTURE_ID)
+    assert_equal 202, post('purchase', purchase, key: 'checkout:capture-refused').first
+    assert_equal 200, webhook(capture_notification(success: 'false')).first
+    assert_equal 'capture_review', capture_status.last[:status]
+    assert_nil capture_status.last[:enrollment]
+  end
+
   def test_http_endpoint_accepts_bearer_and_idempotency_headers
     server = EverpaySandbox.server(@adapter, address: '127.0.0.1', port: 0)
     worker = Thread.new { server.start }
@@ -231,11 +313,32 @@ class SandboxAdapterTest < Minitest::Test
   def open_adapter
     @ledger = EverpaySandbox::Idempotency.new(@path)
     @adapter = EverpaySandbox::Adapter.new(secret: SECRET, signing_key: SIGNING_KEY, idempotency: @ledger,
+                                           webhook_key: WEBHOOK_KEY,
                                            gateway_factory: ->(credentials) { FixtureGateway.new(credentials, @transport) })
   end
 
   def post(action, body, key:, auth: AUTH)
     @adapter.call(method: 'POST', path: "/api/v1/gateway/#{action}", authorization: auth, idempotency_key: key) { JSON.generate(body) }
+  end
+
+  def capture_status(auth: AUTH)
+    post('capture-status', { capture_id: CAPTURE_ID }, key: nil, auth:)
+  end
+
+  def webhook(event, live: 'false')
+    @adapter.call(method: 'POST', path: '/webhooks/adyen', authorization: nil, idempotency_key: nil) do
+      JSON.generate(live:, notificationItems: [{ NotificationRequestItem: event }])
+    end
+  end
+
+  def capture_notification(amount: 100, account: CREDENTIALS.fetch('merchant_account'), event_code: 'CAPTURE', success: 'true')
+    signature = OpenSSL::HMAC.digest('SHA256', [WEBHOOK_KEY].pack('H*'),
+                                     "test-capture:test-authorization:#{account}:fixture:#{amount}:USD:#{event_code}:#{success}")
+    {
+      'pspReference' => 'test-capture', 'originalReference' => 'test-authorization', 'merchantAccountCode' => account,
+      'merchantReference' => 'fixture', 'amount' => { 'value' => amount, 'currency' => 'USD' },
+      'eventCode' => event_code, 'success' => success, 'additionalData' => { 'hmacSignature' => Base64.strict_encode64(signature) }
+    }
   end
 
   def base(action)
