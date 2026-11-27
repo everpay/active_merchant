@@ -330,11 +330,14 @@ class SandboxAdapterTest < Minitest::Test
       assert_equal 'pending', http_capture_status(client).fetch('status')
       assert_equal pending.body, http_gateway_post(client, 'purchase', request, key: 'renewal:http').body
 
-      2.times { assert_equal '200', post_capture_event(client, event).code }
+      assert_equal '200', post_capture_event(client, event).code
+      status = http_capture_status(client)
       assert_equal({
         'capture_id' => CAPTURE_ID, 'status' => 'captured', 'amount' => 1_234, 'currency' => 'EUR',
         'authorization' => 'test-authorization', 'environment' => 'test', 'test' => true
-      }, http_capture_status(client))
+      }, status)
+      assert_equal '200', post_capture_event(client, event).code
+      assert_equal status, http_capture_status(client)
       assert_equal pending.body, http_gateway_post(client, 'purchase', request, key: 'renewal:http').body
       assert_equal %w[authorise authorise capture], @calls.map(&:first)
     end
@@ -347,12 +350,15 @@ class SandboxAdapterTest < Minitest::Test
       success = capture_notification(amount: 1_234, currency: 'EUR')
 
       assert_equal 'pending', http_capture_status(client).fetch('status')
-      2.times { assert_equal '200', post_capture_event(client, failure).code }
-      assert_equal '200', post_capture_event(client, success).code
+      assert_equal '200', post_capture_event(client, failure).code
       status = http_capture_status(client)
       assert_equal 'capture_review', status.fetch('status')
       assert_equal 'test-authorization', status.fetch('authorization')
       refute status.key?('enrollment')
+      assert_equal '200', post_capture_event(client, failure).code
+      assert_equal status, http_capture_status(client)
+      assert_equal '200', post_capture_event(client, success).code
+      assert_equal status, http_capture_status(client)
       assert_equal pending.body, http_gateway_post(client, 'purchase', request, key: 'renewal:http').body
       assert_equal %w[authorise authorise capture], @calls.map(&:first)
     end
